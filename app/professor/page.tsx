@@ -7,9 +7,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { createClient } from '@/lib/supabase/client'
-import { Calendar, Clock, Users, Download, Plus, Edit2, Trash2 } from 'lucide-react'
+import { Calendar, Clock, Users, Download, Plus, Edit2, Trash2, RefreshCw, CheckCircle2, Play, CalendarDays, MapPin } from 'lucide-react'
 import { CreateLectureDialog } from '@/components/create-lecture-dialog'
 import { EditLectureDialog } from '@/components/edit-lecture-dialog'
+import { BulkLectureScheduler } from '@/components/bulk-lecture-scheduler'
+import { LocationRequestDialog } from '@/components/location-request-dialog'
+import { LocationDisplay } from '@/components/location-display'
 import { formatDate, formatTime, formatDateTime } from '@/lib/date-utils'
 
 interface Attendance {
@@ -28,6 +31,9 @@ interface Lecture {
   duration: number
   attendance_count: number
   status?: 'upcoming' | 'ongoing' | 'completed'
+  professor_latitude?: number
+  professor_longitude?: number
+  professor_location_captured_at?: string
 }
 
 export default function ProfessorDashboard() {
@@ -37,8 +43,15 @@ export default function ProfessorDashboard() {
   const [loading, setLoading] = useState(true)
   const [user, setUser] = useState<any>(null)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
+  const [showBulkScheduler, setShowBulkScheduler] = useState(false)
   const [showEditDialog, setShowEditDialog] = useState(false)
   const [lectureToEdit, setLectureToEdit] = useState<Lecture | null>(null)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [dayStarted, setDayStarted] = useState(false)
+  const [showLocationDialog, setShowLocationDialog] = useState(false)
+  const [professorLocation, setProfessorLocation] = useState<{ latitude: number; longitude: number } | null>(null)
+  const [locationGranted, setLocationGranted] = useState(false)
   const router = useRouter()
   const supabase = createClient()
 
@@ -81,7 +94,7 @@ export default function ProfessorDashboard() {
           return
         }
 
-        await fetchLectures()
+        await fetchLectures(user.id)
       } catch (err) {
         console.error('Error in checkAuth:', err)
         window.location.href = '/login'
@@ -90,6 +103,43 @@ export default function ProfessorDashboard() {
 
     checkAuth()
   }, [])
+
+  // Auto-refresh every 5 seconds - updates all dashboard data automatically
+  useEffect(() => {
+    if (!user?.id) return
+
+    const refreshInterval = setInterval(() => {
+      // Refresh lectures (updates status, attendance counts, etc.)
+      fetchLectures(user.id)
+      // Also refresh attendance if a lecture is selected (updates present students list)
+      if (currentLecture) {
+        fetchAttendance(currentLecture.id)
+      }
+    }, 5000) // Refresh every 5 seconds - all data updates automatically
+    
+    return () => clearInterval(refreshInterval)
+  }, [user?.id, currentLecture?.id])
+
+  // Automatic lecture start/end monitoring when day is started
+  // Note: This is handled by the 5-second refresh above, but keeping for explicit monitoring
+  useEffect(() => {
+    if (!dayStarted || !user?.id) return
+
+    const checkLectureStatus = () => {
+      // Lectures automatically start and end based on scheduled time
+      // Status is already calculated in getLectureStatus, just refresh
+      fetchLectures(user.id)
+      // Also refresh attendance to update present students
+      if (currentLecture) {
+        fetchAttendance(currentLecture.id)
+      }
+    }
+
+    // Check every 5 seconds for lecture start/end (aligned with main refresh)
+    const statusInterval = setInterval(checkLectureStatus, 5000)
+    
+    return () => clearInterval(statusInterval)
+  }, [dayStarted, user?.id, currentLecture?.id])
 
   // Set up real-time subscription for attendance updates
   useEffect(() => {
@@ -112,7 +162,10 @@ export default function ProfessorDashboard() {
           // Refresh attendance when new record is added
           fetchAttendance(currentLecture.id)
           // Also refresh lectures to update attendance count
-          fetchLectures()
+          if (user?.id) {
+            fetchLectures(user.id)
+          }
+          setLastUpdated(new Date())
         }
       )
       .subscribe()
@@ -121,7 +174,7 @@ export default function ProfessorDashboard() {
       console.log('Cleaning up real-time subscription')
       supabase.removeChannel(channel)
     }
-  }, [currentLecture])
+  }, [currentLecture, user?.id])
 
   // Set up real-time subscription for lecture updates
   useEffect(() => {
@@ -142,7 +195,7 @@ export default function ProfessorDashboard() {
         (payload) => {
           console.log('Lecture change detected:', payload)
           // Refresh lectures when any change occurs
-          fetchLectures()
+          fetchLectures(user.id)
         }
       )
       .subscribe()
@@ -163,18 +216,35 @@ export default function ProfessorDashboard() {
     return 'completed'
   }
 
-  const fetchLectures = async () => {
+  const fetchLectures = async (professorId?: string) => {
     try {
+      const userId = professorId || user?.id
+      
+      if (!userId) {
+        console.warn('No user ID available for fetching lectures')
+        setLectures([])
+        setLoading(false)
+        return
+      }
+
       // Fetch all lectures, not just recent 10
       const { data, error } = await supabase
         .from('lectures')
         .select('*')
-        .eq('professor_id', user?.id)
+        .eq('professor_id', userId)
         .order('scheduled_time', { ascending: false })
 
-      if (error) throw error
+      if (error) {
+        console.error('Supabase error fetching lectures:', {
+          message: error.message,
+          code: error.code,
+          details: error.details,
+          hint: error.hint
+        })
+        throw error
+      }
 
-      // Get attendance count for each lecture
+      // Get attendance count for each lecture and recalculate status
       const lecturesWithCount = await Promise.all(
         (data || []).map(async (lecture) => {
           const { count } = await supabase
@@ -182,17 +252,28 @@ export default function ProfessorDashboard() {
             .select('*', { count: 'exact', head: true })
             .eq('lecture_id', lecture.id)
 
+          // Recalculate status on each refresh to ensure accuracy
+          const currentStatus = getLectureStatus(lecture.scheduled_time, lecture.duration)
+
           return {
             ...lecture,
             attendance_count: count || 0,
-            status: getLectureStatus(lecture.scheduled_time, lecture.duration),
+            status: currentStatus,
           }
         })
       )
 
       setLectures(lecturesWithCount)
-    } catch (error) {
-      console.error('Error fetching lectures:', error)
+    } catch (error: any) {
+      console.error('Error fetching lectures:', {
+        message: error?.message || 'Unknown error',
+        code: error?.code,
+        details: error?.details,
+        hint: error?.hint,
+        error: error
+      })
+      // Set empty array on error to prevent UI issues
+      setLectures([])
     } finally {
       setLoading(false)
     }
@@ -200,6 +281,7 @@ export default function ProfessorDashboard() {
 
   const fetchAttendance = async (lectureId: string) => {
     try {
+      setIsRefreshing(true)
       const { data, error } = await supabase
         .from('attendance')
         .select(`
@@ -227,8 +309,17 @@ export default function ProfessorDashboard() {
       // This is already the case since we're fetching from attendance table
       // But we can add a note that these are the present students
       setAttendance(formattedAttendance)
+      setLastUpdated(new Date())
     } catch (error) {
       console.error('Error fetching attendance:', error)
+    } finally {
+      setIsRefreshing(false)
+    }
+  }
+
+  const handleRefreshAttendance = () => {
+    if (currentLecture) {
+      fetchAttendance(currentLecture.id)
     }
   }
 
@@ -259,7 +350,9 @@ export default function ProfessorDashboard() {
       if (error) throw error
 
       // Refresh lectures
-      await fetchLectures()
+      if (user?.id) {
+        await fetchLectures(user.id)
+      }
       
       // Clear current lecture if it was deleted
       if (currentLecture?.id === lectureId) {
@@ -273,12 +366,101 @@ export default function ProfessorDashboard() {
   }
 
   const handleEditSuccess = () => {
-    fetchLectures()
+    if (user?.id) {
+      fetchLectures(user.id)
+    }
     // Update current lecture if it was edited
     if (lectureToEdit && currentLecture?.id === lectureToEdit.id) {
       fetchAttendance(lectureToEdit.id)
     }
   }
+
+  const handleLocationGranted = async (location: { latitude: number; longitude: number }) => {
+    setProfessorLocation(location)
+    setLocationGranted(true)
+    setShowLocationDialog(false)
+    
+    // Update all ongoing lectures with professor location
+    if (user?.id) {
+      await updateOngoingLecturesWithLocation(location)
+    }
+  }
+
+  const handleStartDay = () => {
+    // Request location before starting the day
+    if (!locationGranted || !professorLocation) {
+      setShowLocationDialog(true)
+      return
+    }
+    setDayStarted(true)
+    // Update ongoing lectures with location
+    if (user?.id && professorLocation) {
+      updateOngoingLecturesWithLocation(professorLocation)
+    }
+  }
+
+  const updateOngoingLecturesWithLocation = async (location: { latitude: number; longitude: number }) => {
+    if (!user?.id) return
+
+    try {
+      const now = new Date()
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+      const tomorrow = new Date(today)
+      tomorrow.setDate(tomorrow.getDate() + 1)
+
+      // Find all lectures that are ongoing or upcoming today
+      const { data: lecturesToUpdate, error } = await supabase
+        .from('lectures')
+        .select('id, scheduled_time, duration')
+        .eq('professor_id', user.id)
+        .gte('scheduled_time', today.toISOString())
+        .lt('scheduled_time', tomorrow.toISOString())
+
+      if (error) {
+        console.error('Error fetching lectures for location update:', error)
+        return
+      }
+
+      if (!lecturesToUpdate || lecturesToUpdate.length === 0) return
+
+      // Update lectures that are currently ongoing
+      const updatePromises = lecturesToUpdate.map(async (lecture) => {
+        const start = new Date(lecture.scheduled_time)
+        const end = new Date(start.getTime() + (lecture.duration || 60) * 60000)
+        
+        // Only update if lecture is ongoing (between start and end time)
+        if (now >= start && now <= end) {
+          const { error: updateError } = await supabase
+            .from('lectures')
+            .update({
+              professor_latitude: location.latitude,
+              professor_longitude: location.longitude,
+              professor_location_captured_at: now.toISOString(),
+            })
+            .eq('id', lecture.id)
+
+          if (updateError) {
+            console.error(`Error updating location for lecture ${lecture.id}:`, updateError)
+          }
+        }
+      })
+
+      await Promise.all(updatePromises)
+    } catch (error) {
+      console.error('Error updating lectures with location:', error)
+    }
+  }
+
+  // Periodically update professor location for ongoing lectures
+  useEffect(() => {
+    if (!dayStarted || !locationGranted || !professorLocation || !user?.id) return
+
+    const updateLocationInterval = setInterval(() => {
+      updateOngoingLecturesWithLocation(professorLocation)
+    }, 30000) // Update location every 30 seconds for ongoing lectures
+
+    return () => clearInterval(updateLocationInterval)
+  }, [dayStarted, locationGranted, professorLocation, user?.id])
 
   const exportToJSON = () => {
     if (!currentLecture || attendance.length === 0) return
@@ -378,10 +560,36 @@ export default function ProfessorDashboard() {
             <h1 className="text-3xl font-bold mb-2">Professor Dashboard</h1>
             <p className="text-gray-600">Manage lectures and view attendance</p>
           </div>
-          <Button onClick={() => setShowCreateDialog(true)}>
-            <Plus className="w-4 h-4 mr-2" />
-            Create Lecture
-          </Button>
+          <div className="flex gap-2">
+            {!dayStarted && lectures.length > 0 && (
+              <Button 
+                onClick={handleStartDay} 
+                variant="default"
+                className="bg-green-600 hover:bg-green-700"
+              >
+                <Play className="w-4 h-4 mr-2" />
+                Start Day
+              </Button>
+            )}
+            {dayStarted && (
+              <Button 
+                variant="outline"
+                disabled
+                className="bg-green-50 text-green-700 border-green-200"
+              >
+                <CheckCircle2 className="w-4 h-4 mr-2" />
+                Day Active
+              </Button>
+            )}
+            <Button onClick={() => setShowBulkScheduler(true)} variant="outline">
+              <CalendarDays className="w-4 h-4 mr-2" />
+              Schedule Multiple
+            </Button>
+            <Button onClick={() => setShowCreateDialog(true)}>
+              <Plus className="w-4 h-4 mr-2" />
+              Create Lecture
+            </Button>
+          </div>
         </div>
 
         <div className="grid gap-6 lg:grid-cols-3">
@@ -458,6 +666,12 @@ export default function ProfessorDashboard() {
                           <span className="font-semibold">{lecture.attendance_count}</span>
                           <span className="text-gray-600">students present</span>
                         </div>
+                        {lecture.status === 'ongoing' && lecture.professor_latitude && lecture.professor_longitude && (
+                          <div className="text-xs flex items-center gap-1 text-green-600 mt-1">
+                            <MapPin className="w-3 h-3" />
+                            <span>Location tracked</span>
+                          </div>
+                        )}
                       </CardContent>
                     </Card>
                   ))}
@@ -478,12 +692,35 @@ export default function ProfessorDashboard() {
                 <CardHeader>
                   <div className="flex items-center justify-between">
                     <div>
-                      <CardTitle>{currentLecture.title}</CardTitle>
+                      <CardTitle className="flex items-center gap-2">
+                        {currentLecture.title}
+                        {currentLecture.status === 'ongoing' && (
+                          <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full flex items-center gap-1 animate-pulse">
+                            <span className="w-2 h-2 bg-green-600 rounded-full"></span>
+                            Live Session
+                          </span>
+                        )}
+                      </CardTitle>
                       <CardDescription>
                         {formatDateTime(currentLecture.scheduled_time)}
+                        {lastUpdated && (
+                          <span className="ml-2 text-xs">
+                            • Last updated: {lastUpdated.toLocaleTimeString()}
+                          </span>
+                        )}
                       </CardDescription>
                     </div>
                     <div className="flex gap-2">
+                      <Button 
+                        onClick={handleRefreshAttendance} 
+                        variant="outline" 
+                        size="sm"
+                        disabled={isRefreshing}
+                        title="Refresh attendance list"
+                      >
+                        <RefreshCw className={`w-4 h-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+                        Refresh
+                      </Button>
                       <Button onClick={exportToJSON} variant="outline" size="sm">
                         <Download className="w-4 h-4 mr-2" />
                         JSON
@@ -500,18 +737,40 @@ export default function ProfessorDashboard() {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <div className="mb-4">
-                    <div className="text-2xl font-bold text-primary">
-                      {attendance.length}
+                  <div className="mb-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-5 h-5 text-blue-600" />
+                        <div>
+                          <div className="text-2xl font-bold text-blue-900">
+                            {attendance.length}
+                          </div>
+                          <div className="text-sm font-medium text-blue-700">
+                            {currentLecture.status === 'completed' 
+                              ? 'Students Present (Final Count)' 
+                              : currentLecture.status === 'ongoing'
+                              ? 'Students Present (Live)'
+                              : 'Students Present'}
+                          </div>
+                        </div>
+                      </div>
+                      {currentLecture.status === 'ongoing' && (
+                        <div className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded">
+                          Real-time updates active
+                        </div>
+                      )}
                     </div>
-                    <div className="text-sm text-gray-600">
-                      {currentLecture.status === 'completed' 
-                        ? 'Students Present (Final Count)' 
-                        : 'Students Present'}
-                    </div>
-                    {currentLecture.status === 'completed' && (
-                      <p className="text-xs text-gray-500 mt-1">
+                    {currentLecture.status === 'completed' ? (
+                      <p className="text-xs text-blue-600 mt-2">
                         Attendance is now closed. Only students who marked attendance are shown.
+                      </p>
+                    ) : currentLecture.status === 'ongoing' ? (
+                      <p className="text-xs text-blue-600 mt-2">
+                        Viewing students who have marked attendance. List updates automatically as students check in.
+                      </p>
+                    ) : (
+                      <p className="text-xs text-blue-600 mt-2">
+                        Students who mark attendance will appear here once the session starts.
                       </p>
                     )}
                   </div>
@@ -577,6 +836,34 @@ export default function ProfessorDashboard() {
         onOpenChange={setShowEditDialog}
         lecture={lectureToEdit}
         onSuccess={handleEditSuccess}
+      />
+
+      <BulkLectureScheduler
+        open={showBulkScheduler}
+        onOpenChange={setShowBulkScheduler}
+        professorId={user?.id || ''}
+        onSuccess={() => {
+          if (user?.id) {
+            fetchLectures(user.id)
+          }
+        }}
+      />
+
+      {locationGranted && professorLocation && (
+        <LocationDisplay onLocationObtained={(loc) => {
+          setProfessorLocation(loc)
+          if (dayStarted && user?.id) {
+            updateOngoingLecturesWithLocation(loc)
+          }
+        }} />
+      )}
+
+      <LocationRequestDialog
+        open={showLocationDialog}
+        onLocationGranted={handleLocationGranted}
+        onCancel={() => {
+          setShowLocationDialog(false)
+        }}
       />
     </div>
   )

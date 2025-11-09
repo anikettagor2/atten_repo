@@ -109,8 +109,8 @@ export async function verifyFace(
       }
     }
 
-    // Threshold for face recognition (0.8 = 80% similarity)
-    const threshold = 0.8
+    // Threshold for face recognition (0.69 = 69% similarity)
+    const threshold = 0.69
     const verified = bestSimilarity >= threshold
 
     return {

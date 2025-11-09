@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button'
 import { Camera, CheckCircle2, Loader2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { verifyFace, loadFaceModels, detectFaceInImage, compareFaces } from '@/lib/face-recognition'
+import { LocationRequestDialog } from '@/components/location-request-dialog'
+import { LocationDisplay } from '@/components/location-display'
 
 interface FaceRecognitionProps {
   lectureId: string
@@ -22,6 +24,9 @@ export function FaceRecognition({ lectureId, userId, scheduledTime, duration, on
   const [modelsLoading, setModelsLoading] = useState(true)
   const [realTimeConfidence, setRealTimeConfidence] = useState<number | null>(null)
   const [isDetecting, setIsDetecting] = useState(false)
+  const [showLocationDialog, setShowLocationDialog] = useState(false)
+  const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null)
+  const [locationGranted, setLocationGranted] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -160,7 +165,19 @@ export function FaceRecognition({ lectureId, userId, scheduledTime, duration, on
     setRealTimeConfidence(null)
   }
 
+  const handleLocationGranted = (loc: { latitude: number; longitude: number }) => {
+    setLocation(loc)
+    setLocationGranted(true)
+    setShowLocationDialog(false)
+  }
+
   const startCamera = async () => {
+    // Request location first if not already granted
+    if (!locationGranted || !location) {
+      setShowLocationDialog(true)
+      return
+    }
+
     try {
       // Set capturing state first so video element is rendered
       setIsCapturing(true)
@@ -351,7 +368,7 @@ export function FaceRecognition({ lectureId, userId, scheduledTime, duration, on
       const confidencePercent = (result.confidence * 100).toFixed(1)
       console.log(`Face recognition confidence: ${confidencePercent}%`)
 
-      if (result.verified && result.confidence >= 0.8) {
+      if (result.verified && result.confidence >= 0.69) {
         // Upload verification image to Supabase storage
         canvas.toBlob(async (blob) => {
           if (!blob) {
@@ -379,7 +396,26 @@ export function FaceRecognition({ lectureId, userId, scheduledTime, duration, on
               .from('face-images')
               .getPublicUrl(fileName)
 
-            // Mark attendance
+            // Final time check before marking attendance (session might have ended during verification)
+            if (scheduledTime && duration) {
+              const now = new Date()
+              const start = new Date(scheduledTime)
+              const end = new Date(start.getTime() + duration * 60000)
+              
+              if (now > end) {
+                setError('Lecture has ended. Attendance can no longer be marked.')
+                setIsVerifying(false)
+                return
+              }
+              
+              if (now < start) {
+                setError('Lecture has not started yet. Please wait until the scheduled time.')
+                setIsVerifying(false)
+                return
+              }
+            }
+
+            // Mark attendance with location
             const { error: attendanceError } = await supabase
               .from('attendance')
               .insert({
@@ -388,6 +424,8 @@ export function FaceRecognition({ lectureId, userId, scheduledTime, duration, on
                 marked_at: new Date().toISOString(),
                 method: 'face_recognition',
                 image_url: publicUrl,
+                latitude: location?.latitude || null,
+                longitude: location?.longitude || null,
               })
 
             if (attendanceError) {
@@ -417,7 +455,7 @@ export function FaceRecognition({ lectureId, userId, scheduledTime, duration, on
       } else {
         const confidencePercent = (result.confidence * 100).toFixed(1)
         setError(
-          `Face recognition failed. Confidence: ${confidencePercent}% (Required: 80%+). ` +
+          `Face recognition failed. Confidence: ${confidencePercent}% (Required: 69%+). ` +
           'Please ensure good lighting and look directly at the camera.'
         )
         setIsVerifying(false)
@@ -529,15 +567,15 @@ export function FaceRecognition({ lectureId, userId, scheduledTime, duration, on
               <div className="absolute top-4 right-4 bg-black/70 text-white px-4 py-2 rounded-lg backdrop-blur-sm">
                 <div className="text-xs text-gray-300 mb-1">Recognition Accuracy</div>
                 <div className={`text-2xl font-bold ${
-                  realTimeConfidence >= 0.8 
+                  realTimeConfidence >= 0.69 
                     ? 'text-green-400' 
-                    : realTimeConfidence >= 0.6 
+                    : realTimeConfidence >= 0.5 
                     ? 'text-yellow-400' 
                     : 'text-red-400'
                 }`}>
                   {(realTimeConfidence * 100).toFixed(1)}%
                 </div>
-                {realTimeConfidence >= 0.8 && (
+                {realTimeConfidence >= 0.69 && (
                   <div className="text-xs text-green-400 mt-1">✓ Ready to capture</div>
                 )}
               </div>
@@ -582,6 +620,15 @@ export function FaceRecognition({ lectureId, userId, scheduledTime, duration, on
           Position your face in the center and look directly at the camera
         </p>
       )}
+      {locationGranted && location && <LocationDisplay onLocationObtained={setLocation} />}
+      <LocationRequestDialog
+        open={showLocationDialog}
+        onLocationGranted={handleLocationGranted}
+        onCancel={() => {
+          setShowLocationDialog(false)
+          setError('Location access is required to mark attendance.')
+        }}
+      />
     </div>
   )
 }

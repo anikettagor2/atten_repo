@@ -89,10 +89,11 @@ export default function StudentDashboard() {
 
     checkAuth()
     
-    // Refresh lectures every 30 seconds to remove completed ones
+    // Auto-refresh every 5 seconds - updates all dashboard data automatically
+    // Updates: lecture status, scheduled lectures, removes completed ones
     const refreshInterval = setInterval(() => {
       fetchLectures()
-    }, 30000) // Refresh every 30 seconds
+    }, 5000) // Refresh every 5 seconds - all data updates automatically
     
     return () => clearInterval(refreshInterval)
   }, [])
@@ -110,14 +111,18 @@ export default function StudentDashboard() {
 
       if (error) throw error
 
-      const formattedLectures = data?.map((lecture: any) => ({
-        id: lecture.id,
-        title: lecture.title,
-        professor_name: lecture.profiles?.name || 'Unknown',
-        scheduled_time: lecture.scheduled_time,
-        duration: lecture.duration || 60,
-        status: getLectureStatus(lecture.scheduled_time, lecture.duration),
-      })) || []
+      // Recalculate status for each lecture on refresh to ensure accuracy
+      const formattedLectures = data?.map((lecture: any) => {
+        const currentStatus = getLectureStatus(lecture.scheduled_time, lecture.duration || 60)
+        return {
+          id: lecture.id,
+          title: lecture.title,
+          professor_name: lecture.profiles?.name || 'Unknown',
+          scheduled_time: lecture.scheduled_time,
+          duration: lecture.duration || 60,
+          status: currentStatus,
+        }
+      }) || []
 
       // Filter out completed lectures - students should not see them
       const activeLectures = formattedLectures.filter(lecture => lecture.status !== 'completed')
@@ -273,7 +278,7 @@ export default function StudentDashboard() {
                         <span>Click to mark attendance</span>
                       </div>
                       <p className="text-xs text-gray-500 mt-1">
-                        Face recognition required (80%+ accuracy)
+                        Face recognition required (69%+ accuracy)
                       </p>
                     </div>
                   )}
