@@ -1,36 +1,125 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Atocrane - Attendance Management System
+
+A modern attendance management system with AI-powered face recognition built with Next.js, Tailwind CSS, shadcn UI, and Supabase.
+
+## Features
+
+- 🏠 **Home Page** - Project information and features
+- 🔐 **Authentication** - Login and Signup with Google OAuth and email/password
+- 👨‍🎓 **Student Dashboard** - View scheduled lectures and mark attendance using face recognition
+- 👨‍🏫 **Professor Dashboard** - Create lectures, view attendance, and export reports (JSON, CSV, XLS)
+- 👨‍💼 **Admin Panel** - System overview and statistics
+- 📸 **Face Recognition** - AI-powered attendance marking
+
+## Tech Stack
+
+- **Frontend**: Next.js 16, React 19, TypeScript
+- **Styling**: Tailwind CSS, shadcn UI
+- **Backend**: Supabase (PostgreSQL, Auth, Storage)
+- **Face Recognition**: Integration ready for face recognition libraries
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
 
+- Node.js 18+ and npm
+- Supabase account and project
+
+### Installation
+
+1. Clone the repository and navigate to the project:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cd atocrane
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+2. Install dependencies:
+```bash
+npm install
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+3. Set up environment variables:
+Create a `.env.local` file in the root directory:
+```env
+NEXT_PUBLIC_SUPABASE_URL=https://vwpykobijhbmcilfpcat.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ3cHlrb2JpamhibWNpbGZwY2F0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk5MTYzMDQsImV4cCI6MjA3NTQ5MjMwNH0.xslj80NgLHgLLMRniqRuJYTjIV42R232sHnUniNT_yE
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+4. Set up Supabase database:
+   - Go to your Supabase project dashboard
+   - Navigate to SQL Editor
+   - Run the SQL script from `supabase-schema.sql`
 
-## Learn More
+5. Configure Google OAuth (optional):
+   - Go to Supabase Dashboard > Authentication > Providers
+   - Enable Google provider
+   - Add your Google OAuth credentials
 
-To learn more about Next.js, take a look at the following resources:
+6. Run the development server:
+```bash
+npm run dev
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+7. Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Database Schema
 
-## Deploy on Vercel
+The system uses the following main tables:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- **profiles**: User profiles with roles (student, professor, admin)
+- **lectures**: Scheduled lectures by professors
+- **attendance**: Attendance records with face recognition data
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Face Recognition Integration
+
+The face recognition system is ready for integration with the following libraries:
+- [facer-classroom](https://github.com/domingomery/facer-classroom)
+- [yolov8-face](https://github.com/derronqi/yolov8-face)
+- [Crowd-Analysis-by-Face-Recognition](https://github.com/antopraju/Crowd-Analysis-by-Face-Recognition-and-Expression-Detection)
+- [YOLO-CROWD](https://github.com/zaki1003/YOLO-CROWD)
+
+The face recognition component is located in `components/face-recognition.tsx` and can be extended with actual face matching logic.
+
+## Project Structure
+
+```
+atocrane/
+├── app/
+│   ├── admin/          # Admin dashboard
+│   ├── auth/           # Authentication callbacks
+│   ├── login/          # Login page
+│   ├── professor/      # Professor dashboard
+│   ├── signup/         # Signup page
+│   ├── student/        # Student dashboard
+│   ├── layout.tsx      # Root layout
+│   └── page.tsx        # Home page
+├── components/
+│   ├── ui/             # shadcn UI components
+│   ├── face-recognition.tsx
+│   ├── navbar.tsx
+│   └── create-lecture-dialog.tsx
+├── lib/
+│   ├── supabase/       # Supabase client configuration
+│   └── auth.ts         # Authentication utilities
+└── supabase-schema.sql # Database schema
+```
+
+## User Roles
+
+- **Student**: Can view scheduled lectures and mark attendance using face recognition
+- **Professor**: Can create lectures, view attendance, and export reports
+- **Admin**: Can view system statistics and manage users
+
+## Export Features
+
+Professors can export attendance data in:
+- JSON format
+- CSV format
+- XLS format
+
+## License
+
+This project is private and proprietary.
+
+## Support
+
+For issues and questions, please contact the development team.
