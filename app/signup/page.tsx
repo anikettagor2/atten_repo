@@ -123,10 +123,13 @@ export default function SignupPage() {
     setError('')
 
     try {
+      // Store role in localStorage to retrieve after OAuth callback
+      localStorage.setItem('oauth_role', role)
+      
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
+          redirectTo: `${window.location.origin}/auth/callback?role=${role}`,
           queryParams: {
             access_type: 'offline',
             prompt: 'consent',
